@@ -11,9 +11,10 @@ find_package(rclcpp REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(control_msgs REQUIRED)
 find_package(tf2 REQUIRED)
+find_package(tf2_ros REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 
-# C++ executable
+# C++ executables
 add_executable(pose_to_gpio_converter
   src/pose_to_gpio_converter.cpp
 )
@@ -26,9 +27,22 @@ ament_target_dependencies(pose_to_gpio_converter
   tf2_geometry_msgs
 )
 
+add_executable(pose_link_projector
+  src/pose_link_projector.cpp
+)
+
+ament_target_dependencies(pose_link_projector
+  rclcpp
+  geometry_msgs
+  tf2
+  tf2_ros
+  tf2_geometry_msgs
+)
+
 # Install C++ executables
 install(TARGETS
   pose_to_gpio_converter
+  pose_link_projector
   DESTINATION lib/${PROJECT_NAME}
 )
 
