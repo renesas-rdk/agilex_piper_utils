@@ -15,6 +15,11 @@
   <!-- Message dependencies -->
   <depend>geometry_msgs</depend>
   <depend>control_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>std_msgs</depend>
+
+  <!-- Action dependencies -->
+  <depend>rclcpp_action</depend>
 
   <!-- Transform dependencies -->
   <depend>tf2</depend>

@@ -8,8 +8,11 @@ endif()
 # find dependencies
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
+find_package(rclcpp_action REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(control_msgs REQUIRED)
+find_package(sensor_msgs REQUIRED)
+find_package(std_msgs REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
@@ -39,10 +42,23 @@ ament_target_dependencies(pose_link_projector
   tf2_geometry_msgs
 )
 
+add_executable(gripper_action_adapter
+  src/gripper_action_adapter.cpp
+)
+
+ament_target_dependencies(gripper_action_adapter
+  rclcpp
+  rclcpp_action
+  control_msgs
+  sensor_msgs
+  std_msgs
+)
+
 # Install C++ executables
 install(TARGETS
   pose_to_gpio_converter
   pose_link_projector
+  gripper_action_adapter
   DESTINATION lib/${PROJECT_NAME}
 )
 
