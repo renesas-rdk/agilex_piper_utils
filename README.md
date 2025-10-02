@@ -34,7 +34,15 @@ Converts `geometry_msgs/msg/PoseStamped` to `control_msgs/msg/DynamicInterfaceGr
 
 Projects poses between different links in the robot's kinematic chain using TF transforms.
 
-Given a `PoseStamped` of a **source_link** expressed in a **base frame**, publishes the **target_link** pose in the same base frame by composing with the TF transform.
+Given a `PoseStamped` of a **source_link** expressed in a **base frame**, publishes the **target_link** pose in the same base frame by composing with the TF transform. Supports both direct `PoseStamped` input and GPIO state input (for reading poses from hardware controllers).
+
+### Features
+- Projects poses between any two links in the kinematic chain
+- Supports direct PoseStamped messages
+- Supports GPIO state messages (e.g., `arm_current_pose` from hardware controllers)
+- Automatic conversion from xyzrpy format to quaternion
+- Configurable interface group for GPIO states
+- Frame transformation support
 
 ### Parameters
 
@@ -43,10 +51,12 @@ Given a `PoseStamped` of a **source_link** expressed in a **base frame**, publis
 - `target_link` (string, **required**) - Target link frame
 - `lookup_timeout` (double, default: `0.05`) - TF lookup timeout in seconds
 - `accept_mismatched_input_frame` (bool, default: `true`) - Accept input poses in frames other than base_frame
+- `interface_group` (string, default: `arm_current_pose`) - GPIO interface group name for pose state input
 
 ### Topics
 
 - `~/in/pose` (geometry_msgs/PoseStamped) - Input pose of source_link
+- `~/in/gpio_states` (control_msgs/DynamicInterfaceGroupValues) - GPIO state input (xyzrpy format)
 - `~/out/pose` (geometry_msgs/PoseStamped) - Output pose of target_link
 
 ## Usage
@@ -83,11 +93,20 @@ ros2 run agilex_piper_utils pose_to_gpio_converter
 # Send poses to converter
 ros2 topic pub /target_pose geometry_msgs/msg/PoseStamped "{header: {frame_id: 'base_link'}, pose: {position: {x: 0.2, y: 0.0, z: 0.2}, orientation: {w: 1.0}}}"
 
-# Run the pose link projector
-ros2 run agilex_piper_utils pose_link_projector --ros-args -p source_link:=link_a -p target_link:=tool0
+# Run the pose link projector (projects tcp pose to tool0)
+ros2 run agilex_piper_utils pose_link_projector --ros-args \
+  -p source_link:=tcp \
+  -p target_link:=tool0
 
-# Send poses to projector
+# Send poses to projector via PoseStamped
 ros2 topic pub /pose_link_projector/in/pose geometry_msgs/msg/PoseStamped "{header: {frame_id: 'base_link'}, pose: {position: {x: 0.2, y: 0.0, z: 0.2}, orientation: {w: 1.0}}}"
+
+# Connect to GPIO controller states (arm_current_pose will be automatically projected)
+ros2 run agilex_piper_utils pose_link_projector --ros-args \
+  -p source_link:=tcp \
+  -p target_link:=tool0 \
+  -p interface_group:=arm_current_pose \
+  --remap ~/in/gpio_states:=/agilex_piper_gpio_controller/gpio_states
 
 # Monitor output
 ros2 topic echo /pose_link_projector/out/pose

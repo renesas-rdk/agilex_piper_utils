@@ -28,10 +28,14 @@
 // This is useful for applications like tool pose calculation, sensor frame transformations,
 // and motion planning where you need to know the pose of one link given another's pose.
 
+#include <tf2/LinearMath/Matrix3x3.h>
+#include <tf2/LinearMath/Quaternion.h>
 #include <tf2/LinearMath/Transform.h>
 #include <tf2_ros/buffer.h>
 #include <tf2_ros/transform_listener.h>
 
+#include <control_msgs/msg/dynamic_interface_group_values.hpp>
+#include <control_msgs/msg/interface_value.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
@@ -49,6 +53,7 @@ public:
     lookup_timeout_ = this->declare_parameter<double>("lookup_timeout", 0.05);
     accept_mismatched_input_frame_ =
       this->declare_parameter<bool>("accept_mismatched_input_frame", true);
+    interface_group_ = this->declare_parameter<std::string>("interface_group", "arm_current_pose");
 
     // Validate required parameters
     if (source_link_.empty() || target_link_.empty()) {
@@ -64,6 +69,12 @@ public:
     pose_subscriber_ = this->create_subscription<geometry_msgs::msg::PoseStamped>(
       "~/in/pose", qos, std::bind(&PoseLinkProjector::pose_callback, this, std::placeholders::_1));
 
+    // Create GPIO state subscriber for arm_current_pose
+    gpio_state_subscriber_ =
+      this->create_subscription<control_msgs::msg::DynamicInterfaceGroupValues>(
+        "~/in/gpio_states", qos,
+        std::bind(&PoseLinkProjector::gpio_state_callback, this, std::placeholders::_1));
+
     pose_publisher_ = this->create_publisher<geometry_msgs::msg::PoseStamped>("~/out/pose", qos);
 
     RCLCPP_INFO(
@@ -73,21 +84,80 @@ public:
       "  source_link: %s\n"
       "  target_link: %s\n"
       "  lookup_timeout: %.3f s\n"
-      "  accept_mismatched_input_frame: %s",
+      "  accept_mismatched_input_frame: %s\n"
+      "  interface_group: %s\n"
+      "  Subscriptions:\n"
+      "    - ~/in/pose (PoseStamped)\n"
+      "    - ~/in/gpio_states (DynamicInterfaceGroupValues)",
       base_frame_.c_str(), source_link_.c_str(), target_link_.c_str(), lookup_timeout_,
-      accept_mismatched_input_frame_ ? "true" : "false");
+      accept_mismatched_input_frame_ ? "true" : "false", interface_group_.c_str());
   }
 
 private:
-  void pose_callback(const geometry_msgs::msg::PoseStamped::SharedPtr msg)
+  void gpio_state_callback(const control_msgs::msg::DynamicInterfaceGroupValues::SharedPtr msg)
+  {
+    // Find the configured interface group (default: arm_current_pose)
+    for (size_t i = 0; i < msg->interface_groups.size(); ++i) {
+      if (msg->interface_groups[i] == interface_group_) {
+        if (i >= msg->interface_values.size()) {
+          RCLCPP_WARN_THROTTLE(
+            get_logger(), *get_clock(), 2000,
+            "Interface group '%s' found but no corresponding values", interface_group_.c_str());
+          return;
+        }
+
+        const auto & interface_value = msg->interface_values[i];
+        const auto & values = interface_value.values;
+
+        // Validate we have exactly 6 values (x, y, z, rx, ry, rz)
+        if (values.size() != 6) {
+          RCLCPP_WARN_THROTTLE(
+            get_logger(), *get_clock(), 2000,
+            "Interface group '%s' does not have 6 values (expected x,y,z,rx,ry,rz), got %zu",
+            interface_group_.c_str(), values.size());
+          return;
+        }
+
+        // Create PoseStamped message for source_link
+        // Assume values are in order: [x, y, z, rx, ry, rz]
+        geometry_msgs::msg::PoseStamped source_pose;
+        source_pose.header.stamp = this->now();
+        source_pose.header.frame_id = base_frame_;
+
+        // Set position directly from values array
+        source_pose.pose.position.x = values[0];  // x
+        source_pose.pose.position.y = values[1];  // y
+        source_pose.pose.position.z = values[2];  // z
+
+        // Convert RPY to quaternion
+        tf2::Quaternion quat;
+        quat.setRPY(values[3], values[4], values[5]);  // rx, ry, rz
+        source_pose.pose.orientation = tf2::toMsg(quat);
+
+        // Process using existing pose projection logic
+        process_pose(source_pose);
+
+        return;
+      }
+    }
+
+    // If we get here, the configured interface group was not found
+    RCLCPP_WARN_THROTTLE(
+      get_logger(), *get_clock(), 5000, "Received GPIO states but interface group '%s' not found",
+      interface_group_.c_str());
+  }
+
+  void pose_callback(const geometry_msgs::msg::PoseStamped::SharedPtr msg) { process_pose(*msg); }
+
+  void process_pose(const geometry_msgs::msg::PoseStamped & msg)
   {
     // Step 1: Ensure pose is in base_frame
     geometry_msgs::msg::PoseStamped pose_in_base_frame;
-    if (msg->header.frame_id != base_frame_) {
+    if (msg.header.frame_id != base_frame_) {
       if (!accept_mismatched_input_frame_) {
         RCLCPP_WARN_THROTTLE(
           get_logger(), *get_clock(), 2000,
-          "Input frame '%s' != base_frame '%s' (dropping message).", msg->header.frame_id.c_str(),
+          "Input frame '%s' != base_frame '%s' (dropping message).", msg.header.frame_id.c_str(),
           base_frame_.c_str());
         return;
       }
@@ -95,9 +165,9 @@ private:
       // Transform pose to base_frame
       try {
         auto transform_stamped = tf_buffer_.lookupTransform(
-          base_frame_, msg->header.frame_id, msg->header.stamp,
+          base_frame_, msg.header.frame_id, msg.header.stamp,
           tf2::durationFromSec(lookup_timeout_));
-        tf2::doTransform(*msg, pose_in_base_frame, transform_stamped);
+        tf2::doTransform(msg, pose_in_base_frame, transform_stamped);
       } catch (const tf2::TransformException & ex) {
         RCLCPP_WARN_THROTTLE(
           get_logger(), *get_clock(), 2000, "Failed to transform pose to base_frame: %s",
@@ -105,7 +175,7 @@ private:
         return;
       }
     } else {
-      pose_in_base_frame = *msg;
+      pose_in_base_frame = msg;
     }
 
     // Step 2: Lookup transform from source_link to target_link
@@ -153,6 +223,8 @@ private:
 
   // ROS2 components
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr pose_subscriber_;
+  rclcpp::Subscription<control_msgs::msg::DynamicInterfaceGroupValues>::SharedPtr
+    gpio_state_subscriber_;
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pose_publisher_;
 
   // Parameters
@@ -161,6 +233,7 @@ private:
   std::string target_link_;
   double lookup_timeout_;
   bool accept_mismatched_input_frame_;
+  std::string interface_group_;
 };
 
 int main(int argc, char ** argv)

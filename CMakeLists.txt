@@ -37,6 +37,7 @@ add_executable(pose_link_projector
 ament_target_dependencies(pose_link_projector
   rclcpp
   geometry_msgs
+  control_msgs
   tf2
   tf2_ros
   tf2_geometry_msgs
